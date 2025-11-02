@@ -1,8 +1,6 @@
 module go-dovecot-director
 
-go 1.22.0
-
-toolchain go1.22.3
+go 1.25.1
 
 require (
 	github.com/jackc/pgx/v5 v5.6.0
