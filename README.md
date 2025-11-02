@@ -1,6 +1,6 @@
 # go-dovecot-director
 
-A [Dovecot Proxy](https://doc.dovecot.org/admin_manual/dovecot_proxy/) helper to map users to different backends. This application monitors backends running in Kubernetes. Simply, ready PODs are considered as live backends. They are monitored through Kubernetes endpoints.
+A Dovecot Proxy helper to map users to different backends. This application monitors backends running in Kubernetes. Simply, ready PODs are considered as live backends. They are monitored through Kubernetes endpoints.
 
 Mapping is stored in PostgreSQL.
 
@@ -125,6 +125,63 @@ spec:
 ```
 
 ### Dovecot
+
+#### Dovecot 2.4.X
+
+A frontend dovecot proxy should have the following configuration as its passdb and userdb driver:
+
+```
+passdb lua {
+  lua_file = /etc/dovecot/proxy.lua
+}
+
+userdb lua {
+  lua_file = /etc/dovecot/proxy.lua
+}
+```
+
+The LUA script might look like:
+
+```lua
+--- simple module to proxy passdb and userdb requests to http
+--- serializes request parameters as json, and returns the returned json
+--- as a table
+
+local json = require "cjson"
+
+local url = "http://mail-dovecot-director:8080"
+local http_client = nil
+
+function script_init()
+  http_client = dovecot.http.client {
+    connect_timeout = "5 sec",
+    request_max_attempts = 2,
+  }
+
+  return 0
+end
+
+local function proxy_lookup(uri, request)
+    local http_request = http_client:request({ url = url .. uri, method = "POST" })
+    http_request:set_payload(json.encode({user=request.user}))
+    local http_response = http_request:submit()
+    if http_response:status() ~= 200 then
+        error("Invalid http status received")
+    end
+    local resp = json.decode(http_response:payload())
+    return resp.code, resp.attributes
+end
+
+function auth_passdb_lookup(request)
+  return proxy_lookup("/auth_passdb_lookup", request)
+end
+
+function auth_userdb_lookup(request)
+  return proxy_lookup("/auth_userdb_lookup", request)
+end
+```
+
+#### Dovecot 2.3.X
 
 A frontend dovecot proxy should have the following configuration as its passdb and userdb driver:
 
