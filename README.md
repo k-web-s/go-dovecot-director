@@ -8,7 +8,7 @@ Mapping is stored in PostgreSQL.
 
 ### Postgresql
 
-Just simple table is needed for keeping records of username -> backend mappings. Howewer, is is __highly recommended__ to have
+Just simple table is needed for keeping records of username -> backend mappings. Howewer, is is **highly recommended** to have
 a foreign key on field `username` to valid users. For example, with postfixadmin the schema would be:
 
 ```sql
@@ -35,14 +35,14 @@ kind: Role
 metadata:
   name: go-dovecot-director
 rules:
-- apiGroups:
-  - ""
-  resources:
-  - endpoints
-  verbs:
-  - get
-  - list
-  - watch
+  - apiGroups:
+      - ""
+    resources:
+      - endpoints
+    verbs:
+      - get
+      - list
+      - watch
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -53,8 +53,8 @@ roleRef:
   kind: Role
   name: go-dovecot-director
 subjects:
-- kind: ServiceAccount
-  name: go-dovecot-director
+  - kind: ServiceAccount
+    name: go-dovecot-director
 ```
 
 Then, the deployment needs to be told about the service/endpoint to monitor, and needs access to a postgresql table described in [postgresql](postgresql.md). This example monitors _dovecot-backend_ service in namespace _mail_.
@@ -87,25 +87,25 @@ spec:
         app: go-dovecot-director
     spec:
       containers:
-      - env:
-        - name: NAMESPACE
-          value: mail
-        - name: SERVICE
-          value: dovecot-backend
-        envFrom:
-        - secretRef:
-            name: mail-database-secrets
-        image: ghcr.io/k-web-s/go-dovecot-director
-        name: go-dovecot-director
-        resources:
-          requests:
-            cpu: 10m
-            memory: 16Mi
-        securityContext:
-          capabilities:
-            drop:
-              - ALL
-          allowPrivilegeEscalation: false
+        - env:
+            - name: NAMESPACE
+              value: mail
+            - name: SERVICE
+              value: dovecot-backend
+          envFrom:
+            - secretRef:
+                name: mail-database-secrets
+          image: ghcr.io/k-web-s/go-dovecot-director
+          name: go-dovecot-director
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+          securityContext:
+            capabilities:
+              drop:
+                - ALL
+            allowPrivilegeEscalation: false
       securityContext:
         runAsNonRoot: true
       serviceAccountName: go-dovecot-director
@@ -116,10 +116,10 @@ metadata:
   name: go-dovecot-director
 spec:
   ports:
-  - name: http
-    port: 8080
-    protocol: TCP
-    targetPort: 8080
+    - name: http
+      port: 8080
+      protocol: TCP
+      targetPort: 8080
   selector:
     app: go-dovecot-director
 ```
