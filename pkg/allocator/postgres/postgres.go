@@ -34,6 +34,7 @@ import (
 	"errors"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"go-dovecot-director/pkg/allocator"
@@ -97,6 +98,15 @@ func (p *postgresAllocator) allocateTx(ctx context.Context, username string) (ba
 		_, err = tx.Exec(ctx, "UPDATE mailbox_username_backend SET backend = $1, last_ts = NOW() WHERE username = $2", backend, username)
 	} else {
 		_, err = tx.Exec(ctx, "INSERT INTO mailbox_username_backend(backend, username, last_ts) VALUES ($1, $2, NOW())", backend, username)
+
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) {
+			if pgErr.Code == "23503" {
+				err = nil
+
+				return
+			}
+		}
 	}
 
 	if err != nil {
