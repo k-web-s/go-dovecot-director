@@ -32,6 +32,7 @@ package postgres
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -41,34 +42,43 @@ import (
 	"go-dovecot-director/pkg/pool"
 )
 
+const selectMapping = `SELECT backend,
+       expires_at > NOW() AS valid,
+       expires_at > NOW() + $2::interval AS fresh
+  FROM mailbox_username_backend
+ WHERE username = $1`
+
 type postgresAllocator struct {
-	pg *pgxpool.Pool
-	be pool.Pool
+	pg      *pgxpool.Pool
+	be      pool.Pool
+	expiry  time.Duration
+	refresh time.Duration
 }
 
-func New(pg *pgxpool.Pool, be pool.Pool) allocator.Allocator {
+func New(pg *pgxpool.Pool, be pool.Pool, expiry, refresh time.Duration) allocator.Allocator {
 	return &postgresAllocator{
-		pg: pg,
-		be: be,
+		pg:      pg,
+		be:      be,
+		expiry:  expiry,
+		refresh: refresh,
 	}
 }
 
 // Allocate implements allocator.Allocator.
 func (p *postgresAllocator) Allocate(ctx context.Context, username string) (backend string, err error) {
-	// One query without transaction, optimistic path
-	if err = p.pg.QueryRow(ctx, "SELECT backend FROM mailbox_username_backend WHERE username = $1", username).Scan(&backend); err == nil {
-		if available, _ := p.be.IsBackendAlive(ctx, backend); available {
-			return
+	var valid, fresh bool
+
+	// Fast path: a single read, no transaction and no writes
+	if err = p.pg.QueryRow(ctx, selectMapping, username, p.refresh).Scan(&backend, &valid, &fresh); err == nil {
+		if valid && fresh {
+			if available, _ := p.be.IsBackendAlive(ctx, backend); available {
+				return
+			}
 		}
 	} else if !errors.Is(err, pgx.ErrNoRows) {
 		return
 	}
 
-	return p.allocateTx(ctx, username)
-}
-
-// allocates in a transaction
-func (p *postgresAllocator) allocateTx(ctx context.Context, username string) (backend string, err error) {
 	var tx pgx.Tx
 
 	if tx, err = p.pg.Begin(ctx); err != nil {
@@ -78,26 +88,39 @@ func (p *postgresAllocator) allocateTx(ctx context.Context, username string) (ba
 
 	var rowExists bool
 
-	// Query and update timestamp
-	if err = tx.QueryRow(ctx, "SELECT backend FROM mailbox_username_backend WHERE username = $1 FOR UPDATE", username).Scan(&backend); err == nil {
-		if available, _ := p.be.IsBackendAlive(ctx, backend); available {
-			err = tx.Commit(ctx)
-
-			return
-		}
+	// Lock the row and re-check its state
+	if err = tx.QueryRow(ctx, selectMapping+" FOR UPDATE", username, p.refresh).Scan(&backend, &valid, &fresh); err == nil {
 		rowExists = true
-	} else if !errors.Is(err, pgx.ErrNoRows) {
-		return
-	}
-
-	if backend, err = p.be.GetBackend(ctx); err != nil {
+	} else if errors.Is(err, pgx.ErrNoRows) {
+		err = nil
+	} else {
 		return
 	}
 
 	if rowExists {
-		_, err = tx.Exec(ctx, "UPDATE mailbox_username_backend SET backend = $1, last_ts = NOW() WHERE username = $2", backend, username)
+		available, _ := p.be.IsBackendAlive(ctx, backend)
+
+		switch {
+		case valid && available && fresh:
+			// Renewed concurrently, no write needed
+		case valid && available:
+			// Expiring soon, renew the lease only
+			_, err = tx.Exec(ctx, "UPDATE mailbox_username_backend SET expires_at = NOW() + $2::interval WHERE username = $1", username, p.expiry)
+		default:
+			// Expired mapping or dead backend, reassign to a new backend
+			if backend, err = p.be.GetBackend(ctx); err != nil {
+				return
+			}
+
+			_, err = tx.Exec(ctx, "UPDATE mailbox_username_backend SET backend = $1, expires_at = NOW() + $3::interval WHERE username = $2", backend, username, p.expiry)
+		}
 	} else {
-		_, err = tx.Exec(ctx, "INSERT INTO mailbox_username_backend(backend, username, last_ts) VALUES ($1, $2, NOW())", backend, username)
+		// No mapping yet, create one
+		if backend, err = p.be.GetBackend(ctx); err != nil {
+			return
+		}
+
+		_, err = tx.Exec(ctx, "INSERT INTO mailbox_username_backend(backend, username, expires_at) VALUES ($1, $2, NOW() + $3::interval)", backend, username, p.expiry)
 
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) {

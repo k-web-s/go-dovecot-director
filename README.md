@@ -15,9 +15,12 @@ a foreign key on field `username` to valid users. For example, with postfixadmin
 CREATE TABLE mailbox_username_backend (
     username character varying(255) NOT NULL PRIMARY KEY REFERENCES mailbox(username) ON DELETE CASCADE,
     backend character varying(255) NOT NULL,
-    last_ts timestamp with time zone NOT NULL
+    expires_at timestamp with time zone NOT NULL
 );
 ```
+
+Mappings expire after `MAPPING_EXPIRY` (default `1h`), and are renewed when less than `MAPPING_REFRESH` (default `5m`) remains. Expired mappings are assigned a new backend on their next use. Both values can be set via the `MAPPING_EXPIRY` and `MAPPING_REFRESH` environment variables, or the corresponding `-mapping-expiry` and `-mapping-refresh` flags.
+
 
 ### Kubernetes
 

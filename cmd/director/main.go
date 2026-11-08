@@ -72,6 +72,9 @@ var (
 	databaseName     = flag.String("database-name", "postfixadmin", "Postfixadmin database name")
 	databaseUser     = flag.String("database-user", "postfixadmin", "Postfixadmin database username")
 	databasePassword = flag.String("database-password", "postfixadmin", "Postfixadmin database password")
+
+	mappingExpiry  = flag.Duration("mapping-expiry", time.Hour, "Expiry of username to backend mappings")
+	mappingRefresh = flag.Duration("mapping-refresh", 5*time.Minute, "Renew mappings when less than this remains before expiry")
 )
 
 func newClientSet() (*kubernetes.Clientset, error) {
@@ -89,6 +92,10 @@ func newClientSet() (*kubernetes.Clientset, error) {
 
 func main() {
 	flag.Parse()
+
+	if *mappingExpiry <= 0 || *mappingRefresh < 0 || *mappingRefresh >= *mappingExpiry {
+		log.Fatal("mapping-expiry must be positive, and mapping-refresh must be non-negative and less than mapping-expiry")
+	}
 
 	directorListener, err := net.Listen("tcp", *directorListenAddress)
 	if err != nil {
@@ -115,7 +122,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	allocator := postgres.New(db, pool)
+	allocator := postgres.New(db, pool, *mappingExpiry, *mappingRefresh)
 	dir := director.New(allocator)
 
 	ctx, cancel := context.WithCancel(context.Background())
